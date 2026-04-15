@@ -13,6 +13,8 @@ Fehlertoleranter Proxy, der LLM-Responses (z.B. von Qwen, Llama, etc.) auf 100% 
 - **JSON-Reparatur**: Korrigiert häufige JSON-Fehler (Single-Quotes, Trailing-Commas, Python-Konstanten)
 - **Streaming-Support**: Normalisiert auch SSE-Stream-Chunks
 - **Tool-Stream-Härtung**: Requests mit `tools` werden upstream gepuffert und als saubere OpenAI-SSE-Chunks re-emittiert, damit Agenten Tool-Calls zuverlässig ausführen
+- **Request-Härtung**: Bereinigt Assistant-History mit leeren Tool-Call-Turns (`""`, `(empty)`) und entfernt offensichtliche Duplikate aus Retry-Schleifen, bevor sie das Modell erneut verwirren
+- **Token-Default für Tool-Requests**: Setzt bei fehlendem Output-Limit automatisch ein sinnvolles `max_tokens`, damit Tool-Calls und Abschlussantworten seltener auf `finish_reason="length"` laufen
 - **Finish-Reason-Mapping**: Konvertiert nicht-standard Werte (`eos` → `stop`, etc.)
 
 ## Installation
@@ -92,6 +94,7 @@ pytest test_normalizer.py -v
 | `PORT` | `8000` | Port für den Proxy |
 | `UPSTREAM_URL` | `http://localhost:8080/v1` | URL des LLM-Endpunkts |
 | `UPSTREAM_API_KEY` | `""` | API-Key für Upstream (optional) |
+| `DEFAULT_TOOL_MAX_TOKENS` | `8192` | Wird für Requests mit `tools` gesetzt, wenn der Client kein eigenes Output-Limit mitsendet |
 | `TIMEOUT` | `120` | Request-Timeout in Sekunden |
 
 ## Endpoints

@@ -11,7 +11,7 @@ import os
 import json
 import time
 import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException
@@ -29,12 +29,137 @@ app = FastAPI(title="MinProxy", description="OpenAI Format Normalizer Proxy")
 UPSTREAM_URL = os.getenv("UPSTREAM_URL", "http://localhost:8080/v1")
 UPSTREAM_API_KEY = os.getenv("UPSTREAM_API_KEY", "")
 TIMEOUT = float(os.getenv("TIMEOUT", "120"))
+DEFAULT_TOOL_MAX_TOKENS = int(os.getenv("DEFAULT_TOOL_MAX_TOKENS", "8192"))
 
 normalizer = ToolCallNormalizer()
+EMPTY_ASSISTANT_MARKERS = {"", "(empty)"}
 
 
 def _sse_json(payload: dict) -> bytes:
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+    serialized = json.dumps(payload, ensure_ascii=False)
+    return f"data: {serialized}\n\n".encode("utf-8")
+
+
+def _tool_call_signature(
+    message: dict[str, Any],
+) -> tuple[tuple[str, str, str], ...]:
+    signature = []
+    for tool_call in message.get("tool_calls") or []:
+        function = tool_call.get("function") or {}
+        arguments = function.get("arguments", "{}")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(
+                arguments,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        signature.append((
+            tool_call.get("id") or "",
+            function.get("name") or "",
+            arguments.strip(),
+        ))
+    return tuple(signature)
+
+
+def _has_visible_content(content: Any) -> bool:
+    return (
+        isinstance(content, str)
+        and content.strip() not in EMPTY_ASSISTANT_MARKERS
+    )
+
+
+def _normalize_request_message(message: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(message)
+
+    for field in ("finish_reason", "reasoning", "_thinking_prefill"):
+        normalized.pop(field, None)
+
+    if normalized.get("role") != "assistant":
+        return normalized
+
+    tool_calls = normalized.get("tool_calls") or []
+    if tool_calls:
+        normalized["content"] = None
+
+    content = normalized.get("content")
+    if isinstance(content, str) and content.strip() in EMPTY_ASSISTANT_MARKERS:
+        normalized["content"] = None
+
+    return normalized
+
+
+def _is_duplicate_empty_tool_turn(
+    previous_messages: list[dict[str, Any]],
+    candidate: dict[str, Any],
+) -> bool:
+    if candidate.get("role") != "assistant" or not candidate.get("tool_calls"):
+        return False
+    if _has_visible_content(candidate.get("content")):
+        return False
+    if len(previous_messages) < 2:
+        return False
+
+    previous_tool = previous_messages[-1]
+    previous_assistant = previous_messages[-2]
+    if (
+        previous_tool.get("role") != "tool"
+        or previous_assistant.get("role") != "assistant"
+    ):
+        return False
+
+    candidate_signature = _tool_call_signature(candidate)
+    if (
+        not candidate_signature
+        or _tool_call_signature(previous_assistant) != candidate_signature
+    ):
+        return False
+
+    candidate_ids = {
+        tool_call[0]
+        for tool_call in candidate_signature
+        if tool_call[0]
+    }
+    tool_call_id = previous_tool.get("tool_call_id")
+    return bool(tool_call_id and tool_call_id in candidate_ids)
+
+
+def sanitize_request_body(body: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(body)
+
+    raw_messages = body.get("messages") or []
+    sanitized_messages: list[dict[str, Any]] = []
+    for raw_message in raw_messages:
+        if not isinstance(raw_message, dict):
+            sanitized_messages.append(raw_message)
+            continue
+
+        normalized_message = _normalize_request_message(raw_message)
+        if _is_duplicate_empty_tool_turn(
+            sanitized_messages,
+            normalized_message,
+        ):
+            logger.info(
+                "Dropping duplicate empty assistant tool turn for %s",
+                [
+                    tc.get("id")
+                    for tc in normalized_message.get("tool_calls") or []
+                ],
+            )
+            continue
+
+        sanitized_messages.append(normalized_message)
+
+    sanitized["messages"] = sanitized_messages
+
+    has_tools = bool(sanitized.get("tools") or sanitized.get("functions"))
+    has_output_limit = any(
+        key in sanitized
+        for key in ("max_tokens", "max_completion_tokens", "max_output_tokens")
+    )
+    if has_tools and not has_output_limit and DEFAULT_TOOL_MAX_TOKENS > 0:
+        sanitized["max_tokens"] = DEFAULT_TOOL_MAX_TOKENS
+
+    return sanitized
 
 
 def build_stream_chunks_from_response(response: dict) -> list[bytes]:
@@ -119,6 +244,8 @@ async def chat_completions(request: Request):
         body = await request.json()
     except json.JSONDecodeError:
         raise HTTPException(400, "Invalid JSON body")
+
+    body = sanitize_request_body(body)
     
     is_streaming = body.get("stream", False)
     

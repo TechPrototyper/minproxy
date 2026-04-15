@@ -1,6 +1,6 @@
 import json
 
-from main import build_stream_chunks_from_response
+from main import build_stream_chunks_from_response, sanitize_request_body
 
 
 def _decode_json_chunks(chunks: list[bytes]) -> list[dict]:
@@ -102,3 +102,108 @@ def test_build_stream_chunks_for_content_streams_content_once():
     assert len(payloads) == 3
     assert payloads[1]["choices"][0]["delta"] == {"content": "Hallo Welt"}
     assert payloads[2]["choices"][0]["finish_reason"] == "stop"
+
+
+def test_sanitize_request_body_nulls_empty_assistant_tool_content():
+    body = {
+        "model": "qwen",
+        "messages": [{
+            "role": "assistant",
+            "content": "(empty)",
+            "finish_reason": "tool_calls",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "terminal",
+                    "arguments": '{"command":"pwd"}',
+                },
+            }],
+        }],
+        "tools": [{"type": "function"}],
+    }
+
+    sanitized = sanitize_request_body(body)
+
+    assert sanitized["messages"][0]["content"] is None
+    assert "finish_reason" not in sanitized["messages"][0]
+
+
+def test_sanitize_request_body_drops_duplicate_empty_tool_turn_after_tool_result():
+    body = {
+        "model": "qwen",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "arguments": '{"command":"ls -la"}',
+                    },
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": '{"output":"ok"}',
+            },
+            {
+                "role": "assistant",
+                "content": "(empty)",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "arguments": '{"command":"ls -la"}',
+                    },
+                }],
+            },
+            {
+                "role": "user",
+                "content": "Bitte weitermachen.",
+            },
+        ],
+        "tools": [{"type": "function"}],
+    }
+
+    sanitized = sanitize_request_body(body)
+
+    assert len(sanitized["messages"]) == 3
+    assert [message["role"] for message in sanitized["messages"]] == [
+        "assistant",
+        "tool",
+        "user",
+    ]
+
+
+def test_sanitize_request_body_adds_default_max_tokens_for_tool_requests(monkeypatch):
+    monkeypatch.setattr("main.DEFAULT_TOOL_MAX_TOKENS", 4096)
+
+    body = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "tools": [{"type": "function"}],
+    }
+
+    sanitized = sanitize_request_body(body)
+
+    assert sanitized["max_tokens"] == 4096
+
+
+def test_sanitize_request_body_keeps_explicit_max_tokens(monkeypatch):
+    monkeypatch.setattr("main.DEFAULT_TOOL_MAX_TOKENS", 4096)
+
+    body = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "tools": [{"type": "function"}],
+        "max_tokens": 1024,
+    }
+
+    sanitized = sanitize_request_body(body)
+
+    assert sanitized["max_tokens"] == 1024
