@@ -14,7 +14,8 @@ Fehlertoleranter Proxy, der LLM-Responses (z.B. von Qwen, Llama, etc.) auf 100% 
 - **Streaming-Support**: Normalisiert auch SSE-Stream-Chunks
 - **Tool-Stream-Härtung**: Requests mit `tools` werden upstream gepuffert und als saubere OpenAI-SSE-Chunks re-emittiert, damit Agenten Tool-Calls zuverlässig ausführen
 - **Request-Härtung**: Bereinigt Assistant-History mit leeren Tool-Call-Turns (`""`, `(empty)`) und entfernt offensichtliche Duplikate aus Retry-Schleifen, bevor sie das Modell erneut verwirren
-- **Token-Default für Tool-Requests**: Setzt bei fehlendem Output-Limit automatisch ein sinnvolles `max_tokens`, damit Tool-Calls und Abschlussantworten seltener auf `finish_reason="length"` laufen
+- **Leere Verlaufszüge entfernen**: Assistant-Platzhalter wie `(empty)` oder leere Assistant-Turns werden vor dem Upstream-Call aus der History entfernt
+- **Kein künstliches Token-Limit per Default**: Der Proxy injiziert standardmäßig kein `max_tokens`; optional kann ein Fallback-Limit explizit auf Modell-Maximum gesetzt werden
 - **Finish-Reason-Mapping**: Konvertiert nicht-standard Werte (`eos` → `stop`, etc.)
 
 ## Installation
@@ -94,7 +95,7 @@ pytest test_normalizer.py -v
 | `PORT` | `8000` | Port für den Proxy |
 | `UPSTREAM_URL` | `http://localhost:8080/v1` | URL des LLM-Endpunkts |
 | `UPSTREAM_API_KEY` | `""` | API-Key für Upstream (optional) |
-| `DEFAULT_TOOL_MAX_TOKENS` | `8192` | Wird für Requests mit `tools` gesetzt, wenn der Client kein eigenes Output-Limit mitsendet |
+| `DEFAULT_TOOL_MAX_TOKENS` | `0` | `0` deaktiviert jede Injektion; wenn du bewusst ein Fallback willst, setze hier das Modell-Maximum, z.B. `256000` |
 | `TIMEOUT` | `120` | Request-Timeout in Sekunden |
 
 ## Endpoints

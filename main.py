@@ -29,7 +29,7 @@ app = FastAPI(title="MinProxy", description="OpenAI Format Normalizer Proxy")
 UPSTREAM_URL = os.getenv("UPSTREAM_URL", "http://localhost:8080/v1")
 UPSTREAM_API_KEY = os.getenv("UPSTREAM_API_KEY", "")
 TIMEOUT = float(os.getenv("TIMEOUT", "120"))
-DEFAULT_TOOL_MAX_TOKENS = int(os.getenv("DEFAULT_TOOL_MAX_TOKENS", "8192"))
+DEFAULT_TOOL_MAX_TOKENS = int(os.getenv("DEFAULT_TOOL_MAX_TOKENS", "0"))
 
 normalizer = ToolCallNormalizer()
 EMPTY_ASSISTANT_MARKERS = {"", "(empty)"}
@@ -88,6 +88,14 @@ def _normalize_request_message(message: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _is_empty_assistant_placeholder(message: dict[str, Any]) -> bool:
+    if message.get("role") != "assistant":
+        return False
+    if message.get("tool_calls"):
+        return False
+    return not _has_visible_content(message.get("content"))
+
+
 def _is_duplicate_empty_tool_turn(
     previous_messages: list[dict[str, Any]],
     candidate: dict[str, Any],
@@ -134,6 +142,10 @@ def sanitize_request_body(body: dict[str, Any]) -> dict[str, Any]:
             continue
 
         normalized_message = _normalize_request_message(raw_message)
+        if _is_empty_assistant_placeholder(normalized_message):
+            logger.info("Dropping empty assistant placeholder from history")
+            continue
+
         if _is_duplicate_empty_tool_turn(
             sanitized_messages,
             normalized_message,

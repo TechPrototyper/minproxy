@@ -180,8 +180,26 @@ def test_sanitize_request_body_drops_duplicate_empty_tool_turn_after_tool_result
     ]
 
 
-def test_sanitize_request_body_adds_default_max_tokens_for_tool_requests(monkeypatch):
-    monkeypatch.setattr("main.DEFAULT_TOOL_MAX_TOKENS", 4096)
+def test_sanitize_request_body_drops_empty_assistant_placeholder():
+    body = {
+        "model": "qwen",
+        "messages": [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "(empty)"},
+            {"role": "user", "content": "Weiter"},
+        ],
+    }
+
+    sanitized = sanitize_request_body(body)
+
+    assert sanitized["messages"] == [
+        {"role": "user", "content": "Hi"},
+        {"role": "user", "content": "Weiter"},
+    ]
+
+
+def test_sanitize_request_body_does_not_add_max_tokens_by_default(monkeypatch):
+    monkeypatch.setattr("main.DEFAULT_TOOL_MAX_TOKENS", 0)
 
     body = {
         "model": "qwen",
@@ -191,11 +209,25 @@ def test_sanitize_request_body_adds_default_max_tokens_for_tool_requests(monkeyp
 
     sanitized = sanitize_request_body(body)
 
-    assert sanitized["max_tokens"] == 4096
+    assert "max_tokens" not in sanitized
+
+
+def test_sanitize_request_body_can_add_model_maximum_when_opted_in(monkeypatch):
+    monkeypatch.setattr("main.DEFAULT_TOOL_MAX_TOKENS", 256000)
+
+    body = {
+        "model": "qwen",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "tools": [{"type": "function"}],
+    }
+
+    sanitized = sanitize_request_body(body)
+
+    assert sanitized["max_tokens"] == 256000
 
 
 def test_sanitize_request_body_keeps_explicit_max_tokens(monkeypatch):
-    monkeypatch.setattr("main.DEFAULT_TOOL_MAX_TOKENS", 4096)
+    monkeypatch.setattr("main.DEFAULT_TOOL_MAX_TOKENS", 256000)
 
     body = {
         "model": "qwen",
